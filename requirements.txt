@@ -1,0 +1,5 @@
+requests
+beautifulsoup4
+scikit-learn
+numpy
+mecab-python3

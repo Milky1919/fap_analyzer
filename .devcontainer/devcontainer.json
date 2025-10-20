@@ -1,0 +1,16 @@
+{
+    "name": "FAP Analyzer Dev Container",
+    "build": {
+        "dockerfile": "../Dockerfile"
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python"
+            ]
+        }
+    },
+    "forwardPorts": [],
+    "postCreateCommand": "echo 'Container is ready!'",
+    "remoteUser": "root"
+}
