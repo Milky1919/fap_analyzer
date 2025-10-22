@@ -210,7 +210,7 @@ def main(start_page=1, end_page=1):
 if __name__ == "__main__":
     # --- 実行と検証の手順 ---
     # 1. まずは1ページだけでテスト実行
-    main(start_page=1, end_page=1)
+    main(start_page=1, end_page=10)
 
     # 2. DB Browser for SQLiteでfap_posts.dbを開き、データが正しく保存されているか確認
 
