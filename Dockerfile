@@ -16,6 +16,9 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
+# aptでインストールされたmecabrcへのシンボリックリンクを作成し、mecab-python3が参照できるようにする
+RUN ln -s /etc/mecabrc /usr/local/etc/mecabrc
+
 # プロジェクトファイルを格納するディレクトリを作成
 WORKDIR /app
 
