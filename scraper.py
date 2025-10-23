@@ -299,7 +299,7 @@ def main(start_page=1, end_page=100): # end_pageのデフォルト値を増や�
 if __name__ == "__main__":
     # --- 実行と検証の手順 ---
     # 1. 1〜2ページでテスト実行
-    main(start_page=1, end_page=2)
+    main(start_page=1, end_page=10)
 
     # 2. DB Browser for SQLiteでfap_posts.dbを開き、以下の点を確認
     #    - postsテーブルからJSON形式のカラムが消えているか
