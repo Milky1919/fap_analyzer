@@ -28,5 +28,8 @@ COPY requirements.txt .
 # pipを使ってPythonライブラリをインストール
 RUN pip install --no-cache-dir -r requirements.txt
 
+# APIが使用するポートを公開
+EXPOSE 8000
+
 # コンテナの起動時に実行されるデフォルトのコマンド（何もしないで待機）
 CMD ["tail", "-f", "/dev/null"]

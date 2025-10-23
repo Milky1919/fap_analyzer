@@ -14,6 +14,8 @@ def setup_database(db_name="fap_posts.db"):
     冪等性を持ち、何度実行しても安全なように設計されている。
     """
     conn = sqlite3.connect(db_name)
+    # WAL (Write-Ahead Logging) モードを有効にして、読み取りと書き込みの競合を緩和する
+    conn.execute("PRAGMA journal_mode=WAL;")
     cursor = conn.cursor()
 
     # 1. postsテーブル (JSONカラムを削除)
