@@ -10,7 +10,7 @@
             ]
         }
     },
-    "forwardPorts": [],
+    "forwardPorts": [8000],
     "postCreateCommand": "echo 'Container is ready!'",
     "remoteUser": "root"
 }
