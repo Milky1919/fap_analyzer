@@ -54,7 +54,12 @@ PENALTY_PER_REPOST = 15
 MIN_RECOVERY_LIMIT = 5
 MAX_RECOVERY_LIMIT = 15
 # 回復量 = min(回復上限, (D / DAYS_FOR_FULL_RECOVERY) * 回復上限)
-DAYS_FOR_FULL_RECOVERY = 10.0
+DAYS_FOR_FULL_RECOVERY = 365.0
+# ペナルティの時間回復が始まるまでの日数（この期間中は回復量ゼロ）
+NO_RECOVERY_PERIOD_DAYS = 90
+# 再投稿とみなさない猶予期間（分）
+REPOST_GRACE_PERIOD_MINUTES = 20
+
 
 # --- その他 ---
 # 言語的指紋スコアの信頼度係数を計算する際の基準文字数

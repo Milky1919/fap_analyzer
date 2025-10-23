@@ -73,6 +73,31 @@ def setup_database(db_name="fap_posts.db"):
     )
     """)
 
+    # 5. post_historyテーブル (投稿の変更履歴を保存)
+    # scraper.pyが差分更新を行う際に、変更前のデータをここにアーカイブする
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS post_history (
+        history_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_id INTEGER,
+        archived_at TEXT NOT NULL,
+        post_datetime TEXT,
+        title TEXT,
+        purpose TEXT,
+        original_text TEXT,
+        author_name TEXT,
+        author_real_age TEXT,
+        author_real_gender TEXT,
+        author_char_race TEXT,
+        author_char_gender TEXT,
+        author_char_job TEXT,
+        server TEXT,
+        voice_chat TEXT,
+        server_transfer TEXT,
+        sub_char_ok INTEGER,
+        tags_json TEXT -- 変更前のタグはJSON形式で保存するのが手軽
+    )
+    """)
+
     conn.commit()
     return conn
 
