@@ -5,6 +5,8 @@ import time
 import re
 import logging
 import traceback
+import datetime
+import json
 
 # 共有モジュールをインポート
 import db_utils
@@ -145,43 +147,108 @@ def get_or_create_tag(cursor, category, name):
         return cursor.lastrowid
 
 def save_to_db(data, conn):
-    """正規化されたスキーマに従って、投稿とタグのデータを保存する"""
+    """
+    差分更新と履歴保存ロジックを実装したDB保存関数。
+    - 新規投稿: postsとpost_tagsにINSERT
+    - 既存投稿:
+        - 変更があれば、古いデータをpost_historyに保存し、postsとpost_tagsをUPDATE
+        - 変更がなければ、何もしない
+    @return: 投稿が既存だった場合はTrue、新規だった場合はFalseを返す
+    """
     cursor = conn.cursor()
-
-    # 1. postsテーブルに基本情報を保存
     post_data = data['post_data']
-    columns = ', '.join(post_data.keys())
-    placeholders = ', '.join('?' * len(post_data))
-    sql = f"INSERT OR REPLACE INTO posts ({columns}) VALUES ({placeholders})"
-    cursor.execute(sql, list(post_data.values()))
-
-    # 2. post_tagsテーブルに関連を保存
-    post_id = post_data['post_id']
     tag_data = data['tag_data']
+    post_id = post_data['post_id']
 
-    # この投稿に既に関連付けられているタグを一旦すべて削除（更新時のため）
+    # --- 既存データの取得 ---
+    cursor.execute("SELECT * FROM posts WHERE post_id = ?", (post_id,))
+    existing_post_row = cursor.fetchone()
+
+    # --- 新規投稿の場合 ---
+    if not existing_post_row:
+        columns = ', '.join(post_data.keys())
+        placeholders = ', '.join('?' * len(post_data))
+        sql = f"INSERT INTO posts ({columns}) VALUES ({placeholders})"
+        cursor.execute(sql, list(post_data.values()))
+
+        # タグの登録
+        for category, tags in tag_data.items():
+            for tag_name in tags:
+                tag_id = get_or_create_tag(cursor, category, tag_name)
+                cursor.execute("INSERT OR IGNORE INTO post_tags (post_id, tag_id) VALUES (?, ?)", (post_id, tag_id))
+        conn.commit()
+        return False # 新規
+
+    # --- 既存投稿の場合 ---
+    existing_post = dict(existing_post_row)
+    # 既存タグの取得
+    cursor.execute("""
+        SELECT t.tag_category, t.tag_name
+        FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id
+        WHERE pt.post_id = ?
+    """, (post_id,))
+    existing_tags = {}
+    for row in cursor.fetchall():
+        category, name = row[0], row[1]
+        if category not in existing_tags: existing_tags[category] = []
+        existing_tags[category].append(name)
+
+    # --- 変更点の比較 ---
+    is_post_changed = any(str(existing_post.get(k, '')) != str(v) for k, v in post_data.items())
+
+    # タグの比較 (順序を無視して比較するためにsetを使用)
+    new_tags_set = {cat: set(tags) for cat, tags in tag_data.items()}
+    old_tags_set = {cat: set(tags) for cat, tags in existing_tags.items()}
+    is_tags_changed = new_tags_set != old_tags_set
+
+    if not is_post_changed and not is_tags_changed:
+        logging.info(f"Post ID {post_id} は変更がないためスキップします。")
+        return True # 既存
+
+    # --- 変更がある場合のみ、履歴保存と更新を実行 ---
+    logging.info(f"Post ID {post_id} に変更を検出。履歴を保存し、データを更新します。")
+
+    # 1. 古いデータをpost_historyにアーカイブ
+    history_data = existing_post
+    history_data['archived_at'] = datetime.datetime.now().isoformat()
+    history_data['tags_json'] = json.dumps(existing_tags, ensure_ascii=False)
+    hist_cols = ', '.join(history_data.keys())
+    hist_placeholders = ', '.join('?' * len(history_data))
+    cursor.execute(f"INSERT INTO post_history ({hist_cols}) VALUES ({hist_placeholders})", list(history_data.values()))
+
+    # 2. postsテーブルを新しいデータでUPDATE
+    set_clause = ', '.join([f"{key} = ?" for key in post_data.keys()])
+    cursor.execute(f"UPDATE posts SET {set_clause} WHERE post_id = ?", list(post_data.values()) + [post_id])
+
+    # 3. post_tagsテーブルを更新 (DELETE & INSERT)
     cursor.execute("DELETE FROM post_tags WHERE post_id = ?", (post_id,))
-
-    # 新しいタグ情報を登録
     for category, tags in tag_data.items():
         for tag_name in tags:
             tag_id = get_or_create_tag(cursor, category, tag_name)
             cursor.execute("INSERT OR IGNORE INTO post_tags (post_id, tag_id) VALUES (?, ?)", (post_id, tag_id))
 
     conn.commit()
+    return True # 既存
 
 
 # --- メイン処理 ---
 
-def main(start_page=1, end_page=1):
-    """メインのスクレイピング処理"""
+def main(start_page=1, end_page=100): # end_pageのデフォルト値を増やしておく
+    """メインのスクレイピング処理（差分更新対応）"""
     logging.info("スクレイピング処理を開始します。")
     conn = None
     try:
         conn = db_utils.setup_database(config.DB_NAME)
+        # Row factoryを設定して辞書ライクなアクセスを可能に
+        conn.row_factory = sqlite3.Row
         logging.info("データベースのセットアップが完了しました。")
 
+        stop_scraping = False
         for page_num in range(start_page, end_page + 1):
+            if stop_scraping:
+                logging.info("既存の投稿を検出したため、次のページの処理をスキップし、スクレイピングを終了します。")
+                break
+
             target_url = f"{BASE_URL}?p={page_num}"
             logging.info(f"{page_num}ページ目を処理中: {target_url}")
 
@@ -200,7 +267,9 @@ def main(start_page=1, end_page=1):
                     try:
                         parsed_data = parse_post(post_section)
                         if parsed_data and parsed_data['post_data'].get('post_id'):
-                            save_to_db(parsed_data, conn)
+                            is_existing = save_to_db(parsed_data, conn)
+                            if is_existing:
+                                stop_scraping = True # 既存の投稿が見つかったフラグを立てる
                             processed_count += 1
                     except Exception as e:
                         post_id_str = f"post_id: {parsed_data.get('post_data', {}).get('post_id', 'N/A')}" if 'parsed_data' in locals() else "Unknown post"
@@ -208,13 +277,11 @@ def main(start_page=1, end_page=1):
                         logging.error(error_message, exc_info=True)
                         db_utils.log_to_db(conn, 'ERROR', 'scraper.py', error_message, traceback.format_exc())
 
-
                 logging.info(f"{page_num}ページ目から{processed_count}件の投稿を処理しました。")
 
             except requests.RequestException as e:
                 logging.error(f"{page_num}ページ目の取得に失敗: {e}")
                 db_utils.log_to_db(conn, 'ERROR', 'scraper.py', f"HTTPリクエスト失敗: {e}", traceback.format_exc())
-
 
             time.sleep(5)
 

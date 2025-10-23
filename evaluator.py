@@ -355,12 +355,22 @@ def trace_repost_chain(conn: sqlite3.Connection, start_post_id: int, visited: Se
     if not result or not result['is_repost']: return 1
     return 1 + trace_repost_chain(conn, result['most_similar_post_id'], visited)
 
+def get_post_by_id(conn: sqlite3.Connection, post_id: int) -> Optional[Post]:
+    """指定されたpost_idのPostオブジェクトを取得する"""
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM posts WHERE post_id = ?", (post_id,))
+    row = cursor.fetchone()
+    return Post(conn, dict(row)) if row else None
+
 def evaluate_post(target_post: Post, candidates: List[Post], vectorizer: TfidfVectorizer, tag_weights: Dict[str, float], conn: sqlite3.Connection) -> Dict[str, Any]:
-    """1件の投稿を評価"""
+    """1件の投稿を評価（ペナルティロジック改善版）"""
     if not candidates:
         return {"unique_score": 100.0, "most_similar_post_id": None, "max_similarity_score": 0.0,
                 "is_repost": 0, "penalty": 0.0, "author_post_count": 1, "score_breakdown": {"reason": "No candidates"}}
+
     max_sim_score, most_sim_post_id, best_scores = 0.0, None, {}
+    most_similar_post_obj = None # 猶予期間チェックのためにPostオブジェクト自体も保持
+
     for cand_post in candidates:
         static = calculate_static_profile_score(target_post, cand_post)
         behavioral = calculate_behavioral_pattern_score(target_post, cand_post, tag_weights)
@@ -369,18 +379,41 @@ def evaluate_post(target_post: Post, candidates: List[Post], vectorizer: TfidfVe
         bonus = config.CONSISTENCY_BONUS if target_post.server == cand_post.server else 0
         current_sim = base_sim + bonus
         if current_sim > max_sim_score:
-            max_sim_score, most_sim_post_id = current_sim, cand_post.post_id
+            max_sim_score = current_sim
+            most_sim_post_id = cand_post.post_id
+            most_similar_post_obj = cand_post # オブジェクトを更新
             best_scores = {"static": static, "behavioral": behavioral, **linguistic, "bonus": bonus}
+
     is_repost = 1 if max_sim_score >= config.REPOST_THRESHOLD and best_scores.get("static", 0) >= config.REPOST_STATIC_SCORE_THRESHOLD else 0
     post_count = 1 + trace_repost_chain(conn, most_sim_post_id, set()) if is_repost and most_sim_post_id else 1
     penalty = 0.0
-    if is_repost and target_post.post_datetime:
-        N = post_count
-        D = (datetime.datetime.now() - target_post.post_datetime).days
-        base_penalty = config.BASE_PENALTY_COEFFICIENT - (config.PENALTY_PER_REPOST * (N - 1))
-        recovery_limit = max(config.MIN_RECOVERY_LIMIT, config.MAX_RECOVERY_LIMIT - (N - 2))
-        recovery = min(recovery_limit, (D / config.DAYS_FOR_FULL_RECOVERY) * recovery_limit)
-        penalty = base_penalty + recovery
+
+    if is_repost and target_post.post_datetime and most_similar_post_obj and most_similar_post_obj.post_datetime:
+        # 1. 猶予期間（マージン）のチェック
+        time_diff = target_post.post_datetime - most_similar_post_obj.post_datetime
+        if time_diff.total_seconds() / 60 < config.REPOST_GRACE_PERIOD_MINUTES:
+            penalty = 0.0
+            logging.info(f"再投稿猶予期間内のため、ペナルティを 0 に設定します。(時間差: {time_diff})")
+        else:
+            # 2. 新しいペナルティ回復曲線の計算
+            N = post_count
+            # Dは「類似投稿からの」経過日数ではなく、「評価実行時点からの」経過日数
+            D = (datetime.datetime.now() - target_post.post_datetime).days
+
+            base_penalty = config.BASE_PENALTY_COEFFICIENT - (config.PENALTY_PER_REPOST * (N - 1))
+
+            recovery = 0.0
+            if D > config.NO_RECOVERY_PERIOD_DAYS:
+                # 回復期間に入っている場合のみ回復量を計算
+                recovery_days = D - config.NO_RECOVERY_PERIOD_DAYS
+                recovery_period = config.DAYS_FOR_FULL_RECOVERY - config.NO_RECOVERY_PERIOD_DAYS
+                recovery_rate = min(1.0, recovery_days / recovery_period) if recovery_period > 0 else 1.0
+
+                recovery_limit = max(config.MIN_RECOVERY_LIMIT, config.MAX_RECOVERY_LIMIT - (N - 2))
+                recovery = recovery_rate * recovery_limit
+
+            penalty = base_penalty + recovery
+
     unique_score = max(0, min(100, 100 - max_sim_score + penalty))
     return {"unique_score": unique_score, "most_similar_post_id": most_sim_post_id, "max_similarity_score": max_sim_score,
             "is_repost": is_repost, "penalty": penalty, "author_post_count": post_count, "score_breakdown": best_scores}
