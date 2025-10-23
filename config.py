@@ -64,3 +64,18 @@ REPOST_GRACE_PERIOD_MINUTES = 20
 # --- その他 ---
 # 言語的指紋スコアの信頼度係数を計算する際の基準文字数
 RELIABILITY_TEXT_LENGTH = 100
+
+# --- API検索ロジック設定 ---
+# タグ検索時に、指定されたタグと合わせて検索に含める「指定なし」タグのマッピング
+# これにより、例えば「20代」で検索した際に、「年代不問」の投稿もヒットするようになる
+UNSPECIFIED_TAG_MAP = {
+    "wish_real_ages": ["年代不問", "指定なし"],
+    "wish_real_genders": ["男女不問", "性別不問"],
+    "wish_jobs": ["ジョブ不問"],
+    "wish_races": ["種族不問"],
+    "wish_char_genders": ["キャラ性別不問"],
+    "playstyle_tags": ["誰でも歓迎"],
+    # 以下のカテゴリには明確な「指定なし」タグが存在しないため、空リストとする
+    "activity_times": [],
+    "external_tools": [],
+}

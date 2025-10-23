@@ -117,9 +117,18 @@ def search_posts(
         }
         for category, tags in tag_filters.items():
             if tags:
+                search_tags = set(tags)
+                unspecified_tags = set(config.UNSPECIFIED_TAG_MAP.get(category, []))
+
+                # 具体的なタグが指定され、かつそれが「指定なし」タグのみでない場合に、「指定なし」タグを検索条件に加える
+                if not search_tags.issubset(unspecified_tags):
+                    search_tags.update(unspecified_tags)
+
+                final_tags = list(search_tags)
+
                 # プレースホルダーを動的に生成 (例: wish_jobs_0, wish_jobs_1)
-                tag_placeholders = [f":{category}_{i}" for i in range(len(tags))]
-                for i, tag_name in enumerate(tags):
+                tag_placeholders = [f":{category}_{i}" for i in range(len(final_tags))]
+                for i, tag_name in enumerate(final_tags):
                     params[f"{category}_{i}"] = tag_name
 
                 where_clauses.append(f"""
@@ -185,5 +194,5 @@ def search_posts(
 
 # --- サーバー起動設定 ---
 
-if __name__ == "__main__":
-    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
+# if __name__ == "__main__":
+#     uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)

@@ -4,4 +4,4 @@ scikit-learn
 numpy
 mecab-python3
 fastapi
-uvicorn
+uvicorn[standard]
