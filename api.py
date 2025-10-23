@@ -2,6 +2,7 @@
 import uvicorn
 import sqlite3
 import datetime
+import json
 from fastapi import FastAPI, Query, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -31,9 +32,100 @@ class Post(BaseModel):
 
     # evaluation_scoresテーブルから
     unique_score: float
+    score_breakdown: str
+    is_repost: int
+    penalty: float
+    max_similarity_score: float
 
     # tagsテーブルから（後処理で追加）
     tags: Dict[str, List[str]]
+
+    # APIで動的に生成
+    score_reasoning: str
+    score_summary_list: List[str]
+
+
+# --- ヘルパー関数 ---
+
+def format_score_reasoning(score_breakdown_json: str) -> str:
+    """
+    score_breakdownのJSON文字列を人間が読める形式の日本語テキストに変換する。
+    """
+    if not score_breakdown_json:
+        return "スコア内訳データがありません。"
+
+    try:
+        data = json.loads(score_breakdown_json)
+    except json.JSONDecodeError:
+        return "スコア内訳の解析に失敗しました。"
+
+    if data.get("reason") == "No candidates":
+        return "比較対象となる類似投稿が見つかりませんでした。"
+
+    reasoning_parts = []
+
+    # 静的プロファイル
+    static_score = data.get("static", 0)
+    reasoning_parts.append(f"静的プロファイル: {static_score:.1f} / {config.STATIC_PROFILE_SCORE_MAX}点")
+
+    # 行動・嗜好
+    behavioral_score = data.get("behavioral", 0)
+    reasoning_parts.append(f"行動・嗜好パターン: {behavioral_score:.1f} / {config.BEHAVIORAL_PATTERN_SCORE_MAX}点")
+
+    # 言語的指紋 (意味内容 + 文体)
+    semantic_score = data.get("semantic", 0)
+    stylistic_score = data.get("stylistic", 0)
+    linguistic_total = semantic_score + stylistic_score
+    reasoning_parts.append(f"言語的指紋: {linguistic_total:.1f} / {config.LINGUISTIC_FINGERPRINT_SCORE_MAX}点")
+
+    # 一貫性ボーナス
+    bonus = data.get("bonus", 0)
+    if bonus > 0:
+        reasoning_parts.append(f"一貫性ボーナス: +{bonus}点")
+
+    return "\n".join(reasoning_parts)
+
+
+def generate_score_summary_list(
+    is_repost: int,
+    penalty: float,
+    max_similarity_score: float,
+    score_breakdown_json: str
+) -> List[str]:
+    """
+    評価データに基づいて、スコアに関する総評のリストを生成する。
+    """
+    summary_list = []
+
+    try:
+        breakdown = json.loads(score_breakdown_json) if score_breakdown_json else {}
+    except json.JSONDecodeError:
+        breakdown = {}
+
+    # ルール1: 再投稿ペナルティ
+    if is_repost == 1 and penalty < 0:
+        summary_list.append("高頻度または酷似した再投稿と判定され、ペナルティが適用されています。")
+
+    # ルール2: 静的プロファイルの類似性
+    static_score = breakdown.get("static", 0)
+    if static_score >= config.REPOST_STATIC_SCORE_THRESHOLD:
+        summary_list.append("過去の投稿とプロフィール（年代、性別、種族など）が酷似しています。")
+
+    # ルール3: 内容と文体の乖離
+    semantic_score = breakdown.get("semantic", 0)
+    stylistic_score = breakdown.get("stylistic", 0)
+    if semantic_score >= 13 and stylistic_score <= 7:
+        summary_list.append("内容は酷似していますが、文体（書き方）が異なるため、別人の可能性も考慮されました。")
+
+    # デフォルトメッセージ
+    if not summary_list:
+        if max_similarity_score < config.REPOST_THRESHOLD:
+            summary_list.append("ユニーク性の高い新規投稿です。")
+        else:
+            summary_list.append("過去の投稿と類似点が見られますが、再投稿とは判定されませんでした。")
+
+
+    return summary_list
 
 
 # --- FastAPIアプリケーション ---
@@ -72,7 +164,13 @@ def search_posts(
 
         # --- SQLクエリの動的構築 ---
         sql_query = """
-            SELECT p.*, es.unique_score
+            SELECT
+                p.*,
+                es.unique_score,
+                es.score_breakdown,
+                es.is_repost,
+                es.penalty,
+                es.max_similarity_score
             FROM posts p
             JOIN evaluation_scores es ON p.post_id = es.post_id
         """
@@ -179,7 +277,19 @@ def search_posts(
         response_data = []
         for row in posts_rows:
             post_dict = dict(row)
+
+            # タグ情報を追加
             post_dict['tags'] = tags_by_post_id.get(post_dict['post_id'], {})
+
+            # スコアの理由とサマリーを生成
+            post_dict['score_reasoning'] = format_score_reasoning(row['score_breakdown'])
+            post_dict['score_summary_list'] = generate_score_summary_list(
+                is_repost=row['is_repost'],
+                penalty=row['penalty'],
+                max_similarity_score=row['max_similarity_score'],
+                score_breakdown_json=row['score_breakdown']
+            )
+
             response_data.append(Post(**post_dict))
 
         return response_data
